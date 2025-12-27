@@ -42,7 +42,7 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
               <span className="text-emerald-500 text-sm">⟨⟩</span>
             </div>
             <div>
-              <h2 className="font-semibold text-sm">Execution Details</h2>
+              <h2 className="font-semibold text-sm">Code & Sub-LM Calls</h2>
               <p className="text-[11px] text-muted-foreground">
                 Iteration {iteration.iteration} • {new Date(iteration.timestamp).toLocaleString()}
               </p>
@@ -68,18 +68,15 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Tabs - Code Execution and Sub-LM Calls only */}
       <Tabs defaultValue="code" className="flex-1 flex flex-col overflow-hidden">
         <div className="flex-shrink-0 px-4 pt-3">
-          <TabsList className="w-full grid grid-cols-3">
+          <TabsList className="w-full grid grid-cols-2">
             <TabsTrigger value="code" className="text-xs">
               Code Execution
             </TabsTrigger>
-            <TabsTrigger value="response" className="text-xs">
-              Model Response
-            </TabsTrigger>
             <TabsTrigger value="sublm" className="text-xs">
-              Sub-LM Calls
+              Sub-LM Calls ({totalSubCalls})
             </TabsTrigger>
           </TabsList>
         </div>
@@ -95,34 +92,18 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
                 ) : (
                   <Card className="border-dashed">
                     <CardContent className="p-8 text-center">
+                      <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-muted/30 border border-border flex items-center justify-center">
+                        <span className="text-xl opacity-50">⟨⟩</span>
+                      </div>
                       <p className="text-muted-foreground text-sm">
                         No code was executed in this iteration
+                      </p>
+                      <p className="text-muted-foreground text-xs mt-1">
+                        The model didn&apos;t write any code blocks
                       </p>
                     </CardContent>
                   </Card>
                 )}
-              </div>
-            </ScrollArea>
-          </TabsContent>
-
-          <TabsContent value="response" className="h-full m-0 data-[state=active]:flex data-[state=active]:flex-col">
-            <ScrollArea className="flex-1 h-full">
-              <div className="p-4">
-                <Card className="border-sky-500/30 dark:border-sky-400/30">
-                  <CardHeader className="py-3 px-4">
-                    <CardTitle className="text-sm flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-sky-500 dark:bg-sky-400" />
-                      Model Response
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="px-4 pb-4">
-                    <div className="bg-muted rounded-lg p-4 border border-border">
-                      <pre className="text-sm whitespace-pre-wrap font-mono text-foreground/90 leading-relaxed">
-                        {iteration.response}
-                      </pre>
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
             </ScrollArea>
           </TabsContent>
@@ -138,7 +119,7 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
                         className="border-fuchsia-500/30 bg-fuchsia-500/5 dark:border-fuchsia-400/30 dark:bg-fuchsia-400/5"
                       >
                         <CardHeader className="py-3 px-4">
-                          <div className="flex items-center justify-between">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
                             <CardTitle className="text-sm flex items-center gap-2">
                               <span className="w-2 h-2 rounded-full bg-fuchsia-500 dark:bg-fuchsia-400" />
                               llm_query() from Block #{blockIdx + 1}
@@ -161,7 +142,7 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
                             <p className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wider">
                               Prompt
                             </p>
-                            <div className="bg-muted/50 rounded-lg p-3 max-h-32 overflow-y-auto border border-border">
+                            <div className="bg-muted/50 rounded-lg p-3 max-h-40 overflow-y-auto border border-border">
                               <pre className="text-xs whitespace-pre-wrap font-mono">
                                 {typeof call.prompt === 'string' 
                                   ? call.prompt 
@@ -173,7 +154,7 @@ export function ExecutionPanel({ iteration }: ExecutionPanelProps) {
                             <p className="text-xs text-muted-foreground mb-1.5 font-medium uppercase tracking-wider">
                               Response
                             </p>
-                            <div className="bg-fuchsia-500/10 dark:bg-fuchsia-400/10 rounded-lg p-3 max-h-48 overflow-y-auto border border-fuchsia-500/20 dark:border-fuchsia-400/20">
+                            <div className="bg-fuchsia-500/10 dark:bg-fuchsia-400/10 rounded-lg p-3 max-h-56 overflow-y-auto border border-fuchsia-500/20 dark:border-fuchsia-400/20">
                               <pre className="text-xs whitespace-pre-wrap font-mono text-fuchsia-700 dark:text-fuchsia-300">
                                 {call.response}
                               </pre>

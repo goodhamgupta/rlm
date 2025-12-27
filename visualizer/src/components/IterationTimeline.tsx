@@ -63,8 +63,25 @@ export function IterationTimeline({
 
   return (
     <div className="border-b border-border bg-muted/30 flex-shrink-0">
+      {/* Section header */}
+      <div className="px-4 pt-3 pb-2 flex items-center gap-2">
+        <div className="w-5 h-5 rounded bg-primary/10 flex items-center justify-center">
+          <svg className="w-3 h-3 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
+        </div>
+        <span className="text-xs font-semibold text-foreground">Recursive Language Model Trajectory</span>
+        <span className="text-[10px] text-muted-foreground">
+          ({iterations.length} total)
+        </span>
+        <div className="flex-1" />
+        <span className="text-[10px] text-muted-foreground">
+          ← scroll →
+        </span>
+      </div>
+      
       <ScrollArea className="w-full">
-        <div className="flex gap-2 p-3">
+        <div className="flex gap-2 px-3 pb-3">
           {iterations.map((iteration, idx) => {
             const stats = getIterationStats(iteration);
             const isSelected = idx === selectedIteration;

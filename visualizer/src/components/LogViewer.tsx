@@ -150,8 +150,8 @@ export function LogViewer({ logFile, onBack }: LogViewerProps) {
       {/* Main Content - Resizable Split View */}
       <div className="flex-1 min-h-0">
         <ResizablePanelGroup orientation="horizontal">
-          {/* Left Panel - Trajectory */}
-          <ResizablePanel defaultSize={35} minSize={25} maxSize={50}>
+          {/* Left Panel - Prompt & Response */}
+          <ResizablePanel defaultSize={50} minSize={20} maxSize={80}>
             <div className="h-full border-r border-border">
               <TrajectoryPanel
                 iterations={iterations}
@@ -163,8 +163,8 @@ export function LogViewer({ logFile, onBack }: LogViewerProps) {
 
           <ResizableHandle withHandle className="bg-border hover:bg-primary/30 transition-colors" />
 
-          {/* Right Panel - Execution Details */}
-          <ResizablePanel defaultSize={65} minSize={40}>
+          {/* Right Panel - Code Execution & Sub-LM Calls */}
+          <ResizablePanel defaultSize={50} minSize={20} maxSize={80}>
             <div className="h-full bg-background">
               <ExecutionPanel
                 iteration={iterations[selectedIteration] || null}
