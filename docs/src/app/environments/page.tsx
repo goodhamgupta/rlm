@@ -76,8 +76,9 @@ export default function EnvironmentsPage() {
           headers={["Environment", "Isolation", "Best For"]}
           rows={[
             [<Link key="1" href="/environments/local" className="text-primary hover:underline"><code>local</code></Link>, "Non-isolated", "Development"],
-            [<Link key="2" href="/environments/docker" className="text-primary hover:underline"><code>docker</code></Link>, "Non-isolated", "CI/CD, reproducibility"],
-            [<Link key="3" href="/environments/modal" className="text-primary hover:underline"><code>modal</code></Link>, "Isolated", "Production"],
+            [<Link key="2" href="/environments/monty" className="text-primary hover:underline"><code>monty</code></Link>, "Non-isolated", "Stronger local sandboxing"],
+            [<Link key="3" href="/environments/docker" className="text-primary hover:underline"><code>docker</code></Link>, "Non-isolated", "CI/CD, reproducibility"],
+            [<Link key="4" href="/environments/modal" className="text-primary hover:underline"><code>modal</code></Link>, "Isolated", "Production"],
           ]}
         />
       </div>
@@ -129,7 +130,7 @@ FINAL_VAR(summary)`} />
       <div className="my-12">
         <h2 className="text-2xl font-bold mb-4">Architecture</h2>
 
-      <h3 className="text-lg font-medium mt-6 mb-2">Non-Isolated (local, docker)</h3>
+      <h3 className="text-lg font-medium mt-6 mb-2">Non-Isolated (local, monty, docker)</h3>
       <p className="text-muted-foreground mb-4">Direct TCP socket communication:</p>
       <pre className="text-sm">{`┌────────────┐   Socket   ┌────────────┐
 │ Environment│◄──────────►│ LM Handler │
@@ -163,4 +164,3 @@ FINAL_VAR(summary)`} />
     </div>
   );
 }
-

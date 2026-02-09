@@ -162,6 +162,13 @@ class TestEnvironmentImports:
 
         assert LocalREPL is not None
 
+    def test_monty_repl_import(self):
+        """Test MontyREPL import."""
+        pytest.importorskip("pydantic_monty")
+        from rlm.environments.monty_repl import MontyREPL
+
+        assert MontyREPL is not None
+
     def test_modal_repl_import(self):
         """Test ModalREPL import."""
         pytest.importorskip("modal")
@@ -187,6 +194,16 @@ class TestEnvironmentImports:
         from rlm.environments import get_environment
 
         assert callable(get_environment)
+
+    def test_get_environment_monty(self):
+        """Test get_environment can route to MontyREPL."""
+        pytest.importorskip("pydantic_monty")
+        from rlm.environments import get_environment
+        from rlm.environments.monty_repl import MontyREPL
+
+        env = get_environment("monty", {"depth": 1})
+        assert isinstance(env, MontyREPL)
+        env.cleanup()
 
 
 class TestLoggerImports:
@@ -307,6 +324,7 @@ class TestImportConflicts:
             "rlm.environments",
             "rlm.environments.base_env",
             "rlm.environments.local_repl",
+            "rlm.environments.monty_repl",
             "rlm.environments.docker_repl",
             "rlm.logger",
             "rlm.logger.rlm_logger",
@@ -476,12 +494,14 @@ class TestImportCompleteness:
         from rlm.environments.base_env import BaseEnv, IsolatedEnv, NonIsolatedEnv
         from rlm.environments.docker_repl import DockerREPL
         from rlm.environments.local_repl import LocalREPL
+        from rlm.environments.monty_repl import MontyREPL
 
         # Verify they're all classes
         assert isinstance(BaseEnv, type)
         assert isinstance(IsolatedEnv, type)
         assert isinstance(NonIsolatedEnv, type)
         assert isinstance(LocalREPL, type)
+        assert isinstance(MontyREPL, type)
         assert isinstance(DockerREPL, type)
 
         # Test optional ModalREPL

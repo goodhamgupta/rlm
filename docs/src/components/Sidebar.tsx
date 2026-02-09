@@ -15,6 +15,7 @@ const navigation = [
     children: [
       { name: "Overview", href: "/environments" },
       { name: "LocalREPL", href: "/environments/local" },
+      { name: "MontyREPL", href: "/environments/monty" },
       { name: "DockerREPL", href: "/environments/docker" },
       { name: "ModalREPL", href: "/environments/modal" },
     ],
@@ -116,4 +117,3 @@ export function Sidebar() {
     </aside>
   );
 }
-

@@ -1,102 +1,121 @@
 import copy
 import io
+import json
 import os
-import re
+import shutil
 import sys
+import tempfile
+import threading
 import time
 import uuid
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager
 from typing import Any
-
-from pydantic_monty import Monty
 
 from rlm.core.comms_utils import LMRequest, send_lm_request, send_lm_request_batched
 from rlm.core.types import REPLResult, RLMChatCompletion
 from rlm.environments.base_env import NonIsolatedEnv
 
+# =============================================================================
+# Safe Builtins
+# =============================================================================
 
-class FDCapture:
-    """Capture stdout/stderr at the file descriptor level."""
-
-    def __init__(self, capture_stdout=True, capture_stderr=True):
-        self.capture_stdout = capture_stdout
-        self.capture_stderr = capture_stderr
-        self.stdout_fd = sys.stdout.fileno() if sys.stdout else 1
-        self.stderr_fd = sys.stderr.fileno() if sys.stderr else 2
-        self.saved_stdout_fd = None
-        self.saved_stderr_fd = None
-        self.stdout_capture = io.BytesIO()
-        self.stderr_capture = io.BytesIO()
-
-    def __enter__(self):
-        # Flush buffers
-        sys.stdout.flush()
-        sys.stderr.flush()
-
-        if self.capture_stdout:
-            self.saved_stdout_fd = os.dup(self.stdout_fd)
-            self.pipe_out_r, self.pipe_out_w = os.pipe()
-            os.dup2(self.pipe_out_w, self.stdout_fd)
-            os.close(self.pipe_out_w)
-
-        if self.capture_stderr:
-            self.saved_stderr_fd = os.dup(self.stderr_fd)
-            self.pipe_err_r, self.pipe_err_w = os.pipe()
-            os.dup2(self.pipe_err_w, self.stderr_fd)
-            os.close(self.pipe_err_w)
-
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        # Flush C level buffers?
-        # sys.stdout.flush()
-
-        if self.capture_stdout:
-            # Restore stdout
-            os.dup2(self.saved_stdout_fd, self.stdout_fd)
-            os.close(self.saved_stdout_fd)
-            # Read from pipe
-            data = os.read(self.pipe_out_r, 102400)  # Read up to 100KB?
-            # If output is larger, this blocks?
-            # Correct implementation needs thread/poll to drain pipe.
-            # Simplified: assuming small output for RLM.
-            # Or loop until empty?
-            # Since write end is closed (by us closing pipe_out_w AND dup2 closed the original fd copy?),
-            # wait, os.dup2 closes target? Yes.
-            # But the process might still have it open?
-            # No, we closed pipe_out_w in parent.
-            # So read should return EOF when drained.
-            while data:
-                self.stdout_capture.write(data)
-                try:
-                    data = os.read(self.pipe_out_r, 4096)
-                except OSError:
-                    break
-            os.close(self.pipe_out_r)
-
-        if self.capture_stderr:
-            os.dup2(self.saved_stderr_fd, self.stderr_fd)
-            os.close(self.saved_stderr_fd)
-            data = os.read(self.pipe_err_r, 102400)
-            while data:
-                self.stderr_capture.write(data)
-                try:
-                    data = os.read(self.pipe_err_r, 4096)
-                except OSError:
-                    break
-            os.close(self.pipe_err_r)
-
-    def get_stdout(self):
-        return self.stdout_capture.getvalue().decode("utf-8", errors="replace")
-
-    def get_stderr(self):
-        return self.stderr_capture.getvalue().decode("utf-8", errors="replace")
+# Safe builtins - blocks dangerous operations like eval/exec/input
+_SAFE_BUILTINS = {
+    # Core types and functions
+    "print": print,
+    "len": len,
+    "str": str,
+    "int": int,
+    "float": float,
+    "list": list,
+    "dict": dict,
+    "set": set,
+    "tuple": tuple,
+    "bool": bool,
+    "type": type,
+    "isinstance": isinstance,
+    "issubclass": issubclass,
+    "enumerate": enumerate,
+    "zip": zip,
+    "map": map,
+    "filter": filter,
+    "sorted": sorted,
+    "reversed": reversed,
+    "range": range,
+    "min": min,
+    "max": max,
+    "sum": sum,
+    "abs": abs,
+    "round": round,
+    "any": any,
+    "all": all,
+    "pow": pow,
+    "divmod": divmod,
+    "chr": chr,
+    "ord": ord,
+    "hex": hex,
+    "bin": bin,
+    "oct": oct,
+    "repr": repr,
+    "ascii": ascii,
+    "format": format,
+    "hash": hash,
+    "id": id,
+    "iter": iter,
+    "next": next,
+    "slice": slice,
+    "callable": callable,
+    "hasattr": hasattr,
+    "getattr": getattr,
+    "setattr": setattr,
+    "delattr": delattr,
+    "dir": dir,
+    "vars": vars,
+    "bytes": bytes,
+    "bytearray": bytearray,
+    "memoryview": memoryview,
+    "complex": complex,
+    "object": object,
+    "super": super,
+    "property": property,
+    "staticmethod": staticmethod,
+    "classmethod": classmethod,
+    "__import__": __import__,
+    "open": open,
+    # Exceptions
+    "Exception": Exception,
+    "BaseException": BaseException,
+    "ValueError": ValueError,
+    "TypeError": TypeError,
+    "KeyError": KeyError,
+    "IndexError": IndexError,
+    "AttributeError": AttributeError,
+    "FileNotFoundError": FileNotFoundError,
+    "OSError": OSError,
+    "IOError": IOError,
+    "RuntimeError": RuntimeError,
+    "NameError": NameError,
+    "ImportError": ImportError,
+    "StopIteration": StopIteration,
+    "AssertionError": AssertionError,
+    "NotImplementedError": NotImplementedError,
+    "ArithmeticError": ArithmeticError,
+    "LookupError": LookupError,
+    "Warning": Warning,
+    # Blocked
+    "input": None,
+    "eval": None,
+    "exec": None,
+    "compile": None,
+    "globals": None,
+    "locals": None,
+}
 
 
 class LocalREPL(NonIsolatedEnv):
     """
-    Local REPL environment powered by pydantic-monty.
-    Provides a secure, sandboxed Python environment.
+    Local REPL environment with persistent Python namespace.
+    Executes code in a sandboxed namespace with access to context data.
     """
 
     def __init__(
@@ -111,18 +130,13 @@ class LocalREPL(NonIsolatedEnv):
         super().__init__(persistent=persistent, depth=depth, **kwargs)
 
         self.lm_handler_address = lm_handler_address
+        self.original_cwd = os.getcwd()
+        self.temp_dir = tempfile.mkdtemp(prefix=f"repl_env_{uuid.uuid4()}_")
+        self._lock = threading.Lock()
         self._context_count: int = 0
         self._history_count: int = 0
 
-        # Monty State Management
-        self.code_history: list[str] = []
-        self.inputs: dict[str, Any] = {}
-        # History of external function calls: (func_name, args_repr, result)
-        self.call_history: list[tuple[str, Any, Any]] = []
-        # Track length of stdout from previous replays to slice off old output
-        self.last_stdout_len: int = 0
-
-        # Setup environment
+        # Setup globals, locals, and modules in environment.
         self.setup()
 
         # Load context if provided
@@ -135,10 +149,56 @@ class LocalREPL(NonIsolatedEnv):
 
     def setup(self):
         """Setup the environment."""
+        # Create sandboxed globals
+        self.globals: dict[str, Any] = {
+            "__builtins__": _SAFE_BUILTINS.copy(),
+            "__name__": "__main__",
+        }
+        self.locals: dict[str, Any] = {}
+
+        # Track LLM calls made during code execution
         self._pending_llm_calls: list[RLMChatCompletion] = []
 
+        # Add helper functions
+        self.globals["FINAL_VAR"] = self._final_var
+        self.globals["SHOW_VARS"] = self._show_vars
+        self.globals["llm_query"] = self._llm_query
+        self.globals["llm_query_batched"] = self._llm_query_batched
+
+    def _final_var(self, variable_name: str) -> str:
+        """Return the value of a variable as a final answer."""
+        variable_name = variable_name.strip().strip("\"'")
+        if variable_name in self.locals:
+            return str(self.locals[variable_name])
+
+        # Provide helpful error message with available variables
+        available = [k for k in self.locals.keys() if not k.startswith("_")]
+        if available:
+            return (
+                f"Error: Variable '{variable_name}' not found. "
+                f"Available variables: {available}. "
+                f"You must create and assign a variable BEFORE calling FINAL_VAR on it."
+            )
+        return (
+            f"Error: Variable '{variable_name}' not found. "
+            f"No variables have been created yet. "
+            f"You must create and assign a variable in a REPL block BEFORE calling FINAL_VAR on it."
+        )
+
+    def _show_vars(self) -> str:
+        """Show all available variables in the REPL environment."""
+        available = {k: type(v).__name__ for k, v in self.locals.items() if not k.startswith("_")}
+        if not available:
+            return "No variables created yet. Use ```repl``` blocks to create variables."
+        return f"Available variables: {available}"
+
     def _llm_query(self, prompt: str, model: str | None = None) -> str:
-        """Query the LM via socket connection to the handler."""
+        """Query the LM via socket connection to the handler.
+
+        Args:
+            prompt: The prompt to send to the LM.
+            model: Optional model name to use (if handler has multiple clients).
+        """
         if not self.lm_handler_address:
             return "Error: No LM handler configured"
 
@@ -159,7 +219,15 @@ class LocalREPL(NonIsolatedEnv):
             return f"Error: LM query failed - {e}"
 
     def _llm_query_batched(self, prompts: list[str], model: str | None = None) -> list[str]:
-        """Query the LM with multiple prompts concurrently."""
+        """Query the LM with multiple prompts concurrently.
+
+        Args:
+            prompts: List of prompts to send to the LM.
+            model: Optional model name to use (if handler has multiple clients).
+
+        Returns:
+            List of responses in the same order as input prompts.
+        """
         if not self.lm_handler_address:
             return ["Error: No LM handler configured"] * len(prompts)
 
@@ -173,15 +241,13 @@ class LocalREPL(NonIsolatedEnv):
                 if not response.success:
                     results.append(f"Error: {response.error}")
                 else:
+                    # Track this LLM call in list of all calls -- we may want to do this hierarchically
                     self._pending_llm_calls.append(response.chat_completion)
                     results.append(response.chat_completion.response)
 
             return results
         except Exception as e:
             return [f"Error: LM query failed - {e}"] * len(prompts)
-
-    def _print(self, *args, **kwargs):
-        pass
 
     def load_context(self, context_payload: dict | list | str):
         """Load context into the environment as context_0 (and 'context' alias)."""
@@ -191,25 +257,42 @@ class LocalREPL(NonIsolatedEnv):
         self, context_payload: dict | list | str, context_index: int | None = None
     ) -> int:
         """
-        Add a context variable to the inputs.
+        Add a context with versioned variable name.
+
+        Args:
+            context_payload: The context data to add
+            context_index: Optional explicit index. If None, auto-increments.
+
+        Returns:
+            The context index used.
         """
         if context_index is None:
             context_index = self._context_count
 
         var_name = f"context_{context_index}"
 
-        # In Monty, we inject variables directly via inputs
-        self.inputs[var_name] = context_payload
+        if isinstance(context_payload, str):
+            context_path = os.path.join(self.temp_dir, f"context_{context_index}.txt")
+            with open(context_path, "w") as f:
+                f.write(context_payload)
+            self.execute_code(f"with open(r'{context_path}', 'r') as f:\n    {var_name} = f.read()")
+        else:
+            context_path = os.path.join(self.temp_dir, f"context_{context_index}.json")
+            with open(context_path, "w") as f:
+                json.dump(context_payload, f)
+            self.execute_code(
+                f"import json\nwith open(r'{context_path}', 'r') as f:\n    {var_name} = json.load(f)"
+            )
 
-        # Alias context_0 as 'context'
+        # Alias context_0 as 'context' for backward compatibility
         if context_index == 0:
-            self.inputs["context"] = context_payload
+            self.execute_code(f"context = {var_name}")
 
         self._context_count = max(self._context_count, context_index + 1)
         return context_index
 
     def update_handler_address(self, address: tuple[str, int]) -> None:
-        """Update the LM handler address."""
+        """Update the LM handler address for a new completion call."""
         self.lm_handler_address = address
 
     def get_context_count(self) -> int:
@@ -220,19 +303,26 @@ class LocalREPL(NonIsolatedEnv):
         self, message_history: list[dict[str, Any]], history_index: int | None = None
     ) -> int:
         """
-        Store a conversation's message history as a versioned variable in inputs.
+        Store a conversation's message history as a versioned variable.
+
+        Args:
+            message_history: The list of message dicts from a completion call
+            history_index: Optional explicit index. If None, auto-increments.
+
+        Returns:
+            The history index used.
         """
         if history_index is None:
             history_index = self._history_count
 
         var_name = f"history_{history_index}"
 
-        history_copy = copy.deepcopy(message_history)
-        self.inputs[var_name] = history_copy
+        # Store deep copy to avoid reference issues with nested dicts
+        self.locals[var_name] = copy.deepcopy(message_history)
 
-        # Alias history_0 as 'history'
+        # Alias history_0 as 'history' for convenience
         if history_index == 0:
-            self.inputs["history"] = history_copy
+            self.locals["history"] = self.locals[var_name]
 
         self._history_count = max(self._history_count, history_index + 1)
         return history_index
@@ -241,109 +331,74 @@ class LocalREPL(NonIsolatedEnv):
         """Return the number of conversation histories stored."""
         return self._history_count
 
+    @contextmanager
+    def _capture_output(self):
+        """Thread-safe context manager to capture stdout/stderr."""
+        with self._lock:
+            old_stdout, old_stderr = sys.stdout, sys.stderr
+            stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+            try:
+                sys.stdout, sys.stderr = stdout_buf, stderr_buf
+                yield stdout_buf, stderr_buf
+            finally:
+                sys.stdout, sys.stderr = old_stdout, old_stderr
+
+    @contextmanager
+    def _temp_cwd(self):
+        """Temporarily change to temp directory for execution."""
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(self.temp_dir)
+            yield
+        finally:
+            os.chdir(old_cwd)
+
     def execute_code(self, code: str) -> REPLResult:
-        """
-        Execute code using Monty.
-        Strategy: Concatenate history + new code, and Replay execution.
-        We cache external function calls to ensure idempotency and avoid re-billing LLM tokens.
-        """
+        """Execute code in the persistent namespace and return result."""
         start_time = time.perf_counter()
+
+        # Clear pending LLM calls from previous execution
         self._pending_llm_calls = []
 
-        # 1. Rewriting for FINAL_VAR
-        final_var_match = re.search(r"print\(FINAL_VAR\((.*?)\)\)", code)
-        if final_var_match:
-            var_name_quoted = final_var_match.group(1)
-            var_name = var_name_quoted.strip().strip("'").strip('"')
-            code = code.replace(f"print(FINAL_VAR({var_name_quoted}))", f"print({var_name})")
+        with self._capture_output() as (stdout_buf, stderr_buf), self._temp_cwd():
+            try:
+                combined = {**self.globals, **self.locals}
+                exec(code, combined, combined)
 
-        # 2. Add to history
-        self.code_history.append(code)
+                # Update locals with new variables
+                for key, value in combined.items():
+                    if key not in self.globals and not key.startswith("_"):
+                        self.locals[key] = value
 
-        # 3. Construct full code
-        full_code = "\n".join(self.code_history)
-
-        # 4. Prepare inputs and external functions
-        external_funcs = ["llm_query", "llm_query_batched", "print"]
-
-        # 5. Execution State for Replay
-        replay_cursor = 0
-
-        def handle_external_function(func_name: str, args: tuple) -> Any:
-            nonlocal replay_cursor
-
-            if replay_cursor < len(self.call_history):
-                # Verify match
-                cached_name, cached_args, cached_result = self.call_history[replay_cursor]
-                replay_cursor += 1
-                return cached_result
-            else:
-                # New Call
-                result = None
-                if func_name == "llm_query":
-                    result = self._llm_query(*args)
-                elif func_name == "llm_query_batched":
-                    result = self._llm_query_batched(*args)
-                elif func_name == "print":
-                    pass
-
-                self.call_history.append((func_name, args, result))
-                replay_cursor += 1
-                return result
-
-        # 6. Run Monty with FDCapture
-        full_stdout = ""
-        full_stderr = ""
-
-        try:
-            with FDCapture() as captured:
-                input_names = list(self.inputs.keys())
-
-                m = Monty(
-                    full_code,
-                    inputs=input_names,
-                    external_functions=["llm_query", "llm_query_batched"],
-                )
-
-                if self.inputs:
-                    res = m.start(inputs=self.inputs)
-                else:
-                    res = m.start()
-
-                while hasattr(res, "function_name"):
-                    func_name = res.function_name
-                    args = res.args
-                    ret_val = handle_external_function(func_name, tuple(args))
-                    res = res.resume(return_value=ret_val)
-
-            full_stdout = captured.get_stdout()
-            full_stderr = captured.get_stderr()
-
-        except Exception as e:
-            full_stderr = str(e)
-            # If FDCapture failed or exception occurred outside capture
-
-        # 7. Slice Output
-        new_stdout = full_stdout[self.last_stdout_len :]
-
-        # Update cursor
-        self.last_stdout_len = len(full_stdout)
+                stdout = stdout_buf.getvalue()
+                stderr = stderr_buf.getvalue()
+            except Exception as e:
+                stdout = stdout_buf.getvalue()
+                stderr = stderr_buf.getvalue() + f"\n{type(e).__name__}: {e}"
 
         return REPLResult(
-            stdout=new_stdout,
-            stderr=full_stderr,
-            locals={},
+            stdout=stdout,
+            stderr=stderr,
+            locals=self.locals.copy(),
             execution_time=time.perf_counter() - start_time,
             rlm_calls=self._pending_llm_calls.copy(),
         )
-
-    def cleanup(self):
-        self.code_history = []
-        self.inputs = {}
-        self.call_history = []
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.cleanup()
+        return False
+
+    def cleanup(self):
+        """Clean up temp directory and reset state."""
+        try:
+            shutil.rmtree(self.temp_dir)
+        except Exception:
+            pass
+        self.globals.clear()
+        self.locals.clear()
+
+    def __del__(self):
         self.cleanup()
